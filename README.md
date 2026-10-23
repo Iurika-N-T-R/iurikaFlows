@@ -4,7 +4,7 @@ A personal app store for Android. It lists every open-source app published on [g
 installs them, and keeps them up to date.
 
 - Each public, non-fork repo whose latest GitHub release has an `.apk` asset appears in the store
-- Install / update / open, with release notes on tap
+- Tap an app for its page: icon, version, size, date, Install / Update / Open / Uninstall with a progress bar, description, what's new and full changelog
 - Background check every 6 hours on Wi-Fi; apps installed through iurikaflows update silently (Android 12+)
 - iurikaflows updates itself the same way once its own repo has releases
 

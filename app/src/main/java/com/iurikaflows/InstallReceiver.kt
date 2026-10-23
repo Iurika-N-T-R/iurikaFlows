@@ -10,22 +10,24 @@ import android.widget.Toast
 class InstallReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         val repo = intent.getStringExtra("repo") ?: return
-        when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
+        when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 @Suppress("DEPRECATION")
                 val confirm = (intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 // Background activity starts are blocked, so outside the app ask through a notification
-                if (MainActivity.current != null) ctx.startActivity(confirm)
+                if (Store.onChange != null) ctx.startActivity(confirm)
                 else Store.notify(ctx, repo.hashCode(), "Update $repo", "Tap to install", confirm)
             }
             PackageInstaller.STATUS_SUCCESS -> {
                 intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)?.let { Store.remember(ctx, repo, it) }
-                MainActivity.current?.refresh()
+                Store.finished(ctx, repo)
             }
             else -> {
-                val msg = "$repo: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "install failed"}"
-                Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
-                MainActivity.current?.refresh()
+                if (status != PackageInstaller.STATUS_FAILURE_ABORTED) {
+                    val msg = "$repo: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "install failed"}"
+                    Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
+                }
+                Store.finished(ctx, repo)
             }
         }
     }

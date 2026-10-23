@@ -1,5 +1,6 @@
 package com.iurikaflows
 
+import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,19 +10,31 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.net.http.HttpResponseCache
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
+import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.FileNotFoundException
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.Normalizer
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.concurrent.thread
 
-// Every public, non-fork repo of this account with a GitHub release shows up in the store
+// Every public, non-fork repo of this account whose latest release has an APK shows up in the store
 const val OWNER = "Iurika-N-T-R"
 const val PROFILE = "https://github.com/$OWNER"
 
-class App(val repo: String, val description: String, val tag: String, val notes: String, val pageUrl: String, val apkUrl: String?) {
+class Release(val tag: String, val date: String, val notes: String)
+
+class App(val repo: String, val description: String, val releases: List<Release>, val apkUrl: String, val size: Long) {
+    val latest get() = releases[0]
+    val tag get() = latest.tag
     var pkg: String? = null
     var installed: String? = null
     val hasUpdate get() = installed?.let { isNewer(tag, it) } == true
@@ -39,11 +52,36 @@ fun isNewer(tag: String, installed: String): Boolean {
     return false
 }
 
+// ponytail: just enough markdown stripping for release notes; a real renderer if notes get fancy
+fun plain(md: String) = md.replace("\r", "").lines().joinToString("\n") {
+    it.replace(Regex("^#+\\s*"), "").replace(Regex("^\\s*[-*]\\s+"), "• ")
+}.replace("**", "").replace("`", "").trim()
+
+private fun release(r: JSONObject) = Release(r.getString("tag_name"), r.optString("published_at").take(10), plain(r.optString("body").takeUnless { it == "null" }.orEmpty()))
+
 object Store {
-    // ponytail: unauthenticated API = 60 requests/hour, one per repo per refresh; add a token if the repo count grows
-    private fun get(url: String) = (URL(url).openConnection() as HttpURLConnection).run {
-        setRequestProperty("Accept", "application/vnd.github+json")
-        inputStream.bufferedReader().use { it.readText() }
+    var apps = listOf<App>()
+    // repo -> download percent, while an install is running
+    val progress: MutableMap<String, Int> = ConcurrentHashMap()
+    // Set by the visible screen, called on the main thread whenever apps or progress change
+    var onChange: (() -> Unit)? = null
+    private val main = Handler(Looper.getMainLooper())
+
+    fun changed() {
+        main.post { onChange?.invoke() }
+    }
+
+    // Unauthenticated API = 60 requests/hour. The HTTP cache revalidates with ETags, and GitHub doesn't count 304s,
+    // so only repos that actually changed cost a request.
+    private fun get(ctx: Context, url: String): String {
+        if (HttpResponseCache.getInstalled() == null) HttpResponseCache.install(File(ctx.cacheDir, "http"), 5L shl 20)
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.setRequestProperty("Accept", "application/vnd.github+json")
+        if (c.responseCode == 403 || c.responseCode == 429) {
+            val reset = c.getHeaderField("X-RateLimit-Reset")?.toLongOrNull()?.let { java.text.DateFormat.getTimeInstance().format(it * 1000) }
+            throw java.io.IOException("GitHub rate limit reached, try again after ${reset ?: "a while"}")
+        }
+        return c.inputStream.bufferedReader().use { it.readText() }
     }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("packages", Context.MODE_PRIVATE)
@@ -51,27 +89,26 @@ object Store {
     fun remember(ctx: Context, repo: String, pkg: String) = prefs(ctx).edit().putString(repo, pkg).apply()
 
     fun fetch(ctx: Context): List<App> {
-        val repos = JSONArray(get("https://api.github.com/users/$OWNER/repos?per_page=100&sort=pushed"))
+        val repos = JSONArray(get(ctx, "https://api.github.com/users/$OWNER/repos?per_page=100&sort=pushed"))
         val apps = (0 until repos.length()).map(repos::getJSONObject)
             .filter { !it.getBoolean("fork") && !it.getBoolean("archived") }
             .mapNotNull { r ->
                 val name = r.getString("name")
-                val rel = try {
-                    JSONObject(get("https://api.github.com/repos/$OWNER/$name/releases/latest"))
-                } catch (e: FileNotFoundException) {
-                    return@mapNotNull null // no release yet
-                }
-                val assets = rel.getJSONArray("assets")
-                val apk = (0 until assets.length()).map { assets.getJSONObject(it).getString("browser_download_url") }.firstOrNull { it.endsWith(".apk") }
-                App(name, r.optString("description").takeUnless { it == "null" }.orEmpty(), rel.getString("tag_name"),
-                    rel.optString("body"), rel.getString("html_url"), apk)
+                // One request gives the latest release and the changelog; pre-releases are skipped
+                val list = JSONArray(get(ctx, "https://api.github.com/repos/$OWNER/$name/releases?per_page=30"))
+                val rels = (0 until list.length()).map(list::getJSONObject).filter { !it.optBoolean("prerelease") }
+                val assets = rels.firstOrNull()?.getJSONArray("assets") ?: return@mapNotNull null // no release yet
+                val apk = (0 until assets.length()).map(assets::getJSONObject)
+                    .firstOrNull { it.getString("name").endsWith(".apk") } ?: return@mapNotNull null
+                App(name, r.optString("description").takeUnless { it == "null" }.orEmpty(), rels.map(::release),
+                    apk.getString("browser_download_url"), apk.getLong("size"))
             }
         resolveInstalled(ctx, apps)
         return apps
     }
 
     // Package names aren't in the release, so: the one we installed it as, else an installed app whose label matches the repo name
-    private fun resolveInstalled(ctx: Context, apps: List<App>) {
+    fun resolveInstalled(ctx: Context, apps: List<App>) {
         val pm = ctx.packageManager
         fun norm(s: String) = Normalizer.normalize(s, Normalizer.Form.NFD).replace(Regex("[^A-Za-z0-9]"), "").lowercase()
         val byLabel by lazy {
@@ -86,6 +123,46 @@ object Store {
         }
     }
 
+    fun label(app: App) = progress[app.repo]?.let { "$it%" } ?: when {
+        app.hasUpdate -> "Update"
+        app.installed != null -> "Open"
+        else -> "Install"
+    }
+
+    // What the main button does, on the list and on the details screen
+    fun act(activity: Activity, app: App) {
+        if (app.repo in progress) return
+        if (app.installed != null && !app.hasUpdate) {
+            activity.packageManager.getLaunchIntentForPackage(app.pkg!!)?.let(activity::startActivity)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 26 && !activity.packageManager.canRequestPackageInstalls()) {
+            Toast.makeText(activity, "Allow iurikaflows to install apps, then come back", Toast.LENGTH_LONG).show()
+            activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")))
+            return
+        }
+        val ctx = activity.applicationContext
+        progress[app.repo] = 0
+        changed()
+        thread {
+            try {
+                install(ctx, app) { p -> if (progress.put(app.repo, p) != p) changed() }
+            } catch (e: Exception) {
+                main.post { Toast.makeText(ctx, "${app.repo}: ${e.message}", Toast.LENGTH_LONG).show() }
+                finished(ctx, app.repo)
+            }
+        }
+    }
+
+    // Install ended (any outcome): drop progress and re-read installed versions
+    fun finished(ctx: Context, repo: String) {
+        main.post {
+            progress.remove(repo)
+            resolveInstalled(ctx, apps)
+            onChange?.invoke()
+        }
+    }
+
     // Streams the APK straight into an install session. Apps this store installed update silently on Android 12+.
     fun install(ctx: Context, app: App, progress: (Int) -> Unit = {}) {
         val pi = ctx.packageManager.packageInstaller
@@ -95,6 +172,7 @@ object Store {
         try {
             pi.openSession(id).use { s ->
                 val c = URL(app.apkUrl).openConnection() as HttpURLConnection
+                c.useCaches = false
                 val total = c.contentLengthLong
                 c.inputStream.use { input ->
                     s.openWrite("apk", 0, total).use { out ->

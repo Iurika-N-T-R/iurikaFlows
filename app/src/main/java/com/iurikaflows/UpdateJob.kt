@@ -12,7 +12,7 @@ import kotlin.concurrent.thread
 class UpdateJob : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
         thread {
-            runCatching { Store.fetch(this).filter { it.hasUpdate && it.apkUrl != null }.forEach { Store.install(this, it) } }
+            runCatching { Store.fetch(this).filter { it.hasUpdate }.forEach { Store.install(this, it) } }
             jobFinished(params, false)
         }
         return true
