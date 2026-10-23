@@ -1,0 +1,8 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp" android:viewportWidth="48" android:viewportHeight="48">
+    <path android:fillColor="#ff315c" android:pathData="M24,2a22,22 0,1 0,0.01 0z" />
+    <!-- shopping bag with a down arrow -->
+    <path android:fillColor="#fff" android:pathData="M14,17h20l-1.5,17h-17z" />
+    <path android:strokeColor="#fff" android:strokeWidth="2.5" android:pathData="M19,17v-2a5,5 0,0 1,10 0v2" />
+    <path android:fillColor="#ff315c" android:pathData="M22.5,21h3v6h3l-4.5,5l-4.5,-5h3z" />
+</vector>
