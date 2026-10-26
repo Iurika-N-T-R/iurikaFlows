@@ -16,7 +16,7 @@ class InstallReceiver : BroadcastReceiver() {
                 val confirm = (intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 // Background activity starts are blocked, so outside the app ask through a notification
                 if (Store.onChange != null) ctx.startActivity(confirm)
-                else Store.notify(ctx, repo.hashCode(), "Update $repo", "Tap to install", confirm)
+                else Store.notify(ctx, repo.hashCode(), "Mettre à jour $repo", "Touche pour installer", confirm)
             }
             PackageInstaller.STATUS_SUCCESS -> {
                 intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)?.let { Store.remember(ctx, repo, it) }
@@ -24,7 +24,7 @@ class InstallReceiver : BroadcastReceiver() {
             }
             else -> {
                 if (status != PackageInstaller.STATUS_FAILURE_ABORTED) {
-                    val msg = "$repo: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "install failed"}"
+                    val msg = "$repo: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "échec de l'installation"}"
                     Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
                 }
                 Store.finished(ctx, repo)

@@ -38,6 +38,8 @@ class App(val repo: String, val description: String, val releases: List<Release>
     var pkg: String? = null
     var installed: String? = null
     val hasUpdate get() = installed?.let { isNewer(tag, it) } == true
+    // The store lists its own repo too; it's shown apart, as "the store itself"
+    val isSelf get() = repo.equals("iurikaflows", true)
 }
 
 // Numeric compare of "v1.2.10" against "1.2.9"; anything non-numeric is ignored
@@ -77,9 +79,10 @@ object Store {
         if (HttpResponseCache.getInstalled() == null) HttpResponseCache.install(File(ctx.cacheDir, "http"), 5L shl 20)
         val c = URL(url).openConnection() as HttpURLConnection
         c.setRequestProperty("Accept", "application/vnd.github+json")
+        settings(ctx).getString("token", "")!!.trim().takeIf { it.isNotEmpty() }?.let { c.setRequestProperty("Authorization", "Bearer $it") }
         if (c.responseCode == 403 || c.responseCode == 429) {
             val reset = c.getHeaderField("X-RateLimit-Reset")?.toLongOrNull()?.let { java.text.DateFormat.getTimeInstance().format(it * 1000) }
-            throw java.io.IOException("GitHub rate limit reached, try again after ${reset ?: "a while"}")
+            throw java.io.IOException("limite de l'API GitHub atteinte, réessaie après ${reset ?: "un moment"}")
         }
         return c.inputStream.bufferedReader().use { it.readText() }
     }
@@ -88,7 +91,15 @@ object Store {
 
     fun remember(ctx: Context, repo: String, pkg: String) = prefs(ctx).edit().putString(repo, pkg).apply()
 
+    // autoStore, autoApps, wifi, pre, freq (hours), token, auto_<repo>, checked (last successful fetch)
+    fun settings(ctx: Context) = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
+
+    fun autoUpdates(ctx: Context, app: App) = settings(ctx).let {
+        it.getBoolean(if (app.isSelf) "autoStore" else "autoApps", true) && it.getBoolean("auto_${app.repo}", true)
+    }
+
     fun fetch(ctx: Context): List<App> {
+        val pre = settings(ctx).getBoolean("pre", false)
         val repos = JSONArray(get(ctx, "https://api.github.com/users/$OWNER/repos?per_page=100&sort=pushed"))
         val apps = (0 until repos.length()).map(repos::getJSONObject)
             .filter { !it.getBoolean("fork") && !it.getBoolean("archived") }
@@ -96,7 +107,7 @@ object Store {
                 val name = r.getString("name")
                 // One request gives the latest release and the changelog; pre-releases are skipped
                 val list = JSONArray(get(ctx, "https://api.github.com/repos/$OWNER/$name/releases?per_page=30"))
-                val rels = (0 until list.length()).map(list::getJSONObject).filter { !it.optBoolean("prerelease") }
+                val rels = (0 until list.length()).map(list::getJSONObject).filter { pre || !it.optBoolean("prerelease") }
                 val assets = rels.firstOrNull()?.getJSONArray("assets") ?: return@mapNotNull null // no release yet
                 val apk = (0 until assets.length()).map(assets::getJSONObject)
                     .firstOrNull { it.getString("name").endsWith(".apk") } ?: return@mapNotNull null
@@ -104,6 +115,7 @@ object Store {
                     apk.getString("browser_download_url"), apk.getLong("size"))
             }
         resolveInstalled(ctx, apps)
+        settings(ctx).edit().putLong("checked", System.currentTimeMillis()).apply()
         return apps
     }
 
@@ -123,10 +135,10 @@ object Store {
         }
     }
 
-    fun label(app: App) = progress[app.repo]?.let { "$it%" } ?: when {
-        app.hasUpdate -> "Update"
-        app.installed != null -> "Open"
-        else -> "Install"
+    fun label(app: App) = progress[app.repo]?.let { "$it %" } ?: when {
+        app.hasUpdate -> "Mettre à jour"
+        app.installed != null -> "Ouvrir"
+        else -> "Installer"
     }
 
     // What the main button does, on the list and on the details screen
@@ -137,7 +149,7 @@ object Store {
             return
         }
         if (Build.VERSION.SDK_INT >= 26 && !activity.packageManager.canRequestPackageInstalls()) {
-            Toast.makeText(activity, "Allow iurikaflows to install apps, then come back", Toast.LENGTH_LONG).show()
+            Toast.makeText(activity, "Autorise iurikaflows à installer des apps, puis reviens", Toast.LENGTH_LONG).show()
             activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")))
             return
         }
@@ -201,7 +213,7 @@ object Store {
     fun notify(ctx: Context, id: Int, title: String, text: String, tap: Intent) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
         val b = if (Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(NotificationChannel("updates", "Updates", NotificationManager.IMPORTANCE_DEFAULT))
+            nm.createNotificationChannel(NotificationChannel("updates", "Mises à jour", NotificationManager.IMPORTANCE_DEFAULT))
             Notification.Builder(ctx, "updates")
         } else @Suppress("DEPRECATION") Notification.Builder(ctx)
         val pending = PendingIntent.getActivity(ctx, id, tap, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)

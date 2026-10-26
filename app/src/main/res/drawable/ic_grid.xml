@@ -1,0 +1,12 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M4.5,3h4a1.5,1.5 0,0 1,1.5,1.5v4a1.5,1.5 0,0 1,-1.5,1.5h-4a1.5,1.5 0,0 1,-1.5,-1.5v-4a1.5,1.5 0,0 1,1.5,-1.5z" android:strokeColor="#FFFFFF" android:strokeWidth="2" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <group android:translateX="11" android:translateY="0">
+      <path android:pathData="M4.5,3h4a1.5,1.5 0,0 1,1.5,1.5v4a1.5,1.5 0,0 1,-1.5,1.5h-4a1.5,1.5 0,0 1,-1.5,-1.5v-4a1.5,1.5 0,0 1,1.5,-1.5z" android:strokeColor="#FFFFFF" android:strokeWidth="2" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    </group>
+    <group android:translateX="0" android:translateY="11">
+      <path android:pathData="M4.5,3h4a1.5,1.5 0,0 1,1.5,1.5v4a1.5,1.5 0,0 1,-1.5,1.5h-4a1.5,1.5 0,0 1,-1.5,-1.5v-4a1.5,1.5 0,0 1,1.5,-1.5z" android:strokeColor="#FFFFFF" android:strokeWidth="2" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    </group>
+    <group android:translateX="11" android:translateY="11">
+      <path android:pathData="M4.5,3h4a1.5,1.5 0,0 1,1.5,1.5v4a1.5,1.5 0,0 1,-1.5,1.5h-4a1.5,1.5 0,0 1,-1.5,-1.5v-4a1.5,1.5 0,0 1,1.5,-1.5z" android:strokeColor="#FFFFFF" android:strokeWidth="2" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    </group>
+</vector>
