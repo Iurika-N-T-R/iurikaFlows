@@ -21,6 +21,7 @@ import android.view.animation.LinearInterpolator
 import android.view.animation.RotateAnimation
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -125,6 +126,7 @@ fun Activity.openDetail(app: App) = startActivity(Intent(this, DetailActivity::c
 class MainActivity : Activity() {
     private var tab = 0
     private var query = ""
+    private var cat: String? = null // null = every category
     private var loading = false
     private var error: String? = null
     private val expanded = mutableSetOf<String>()
@@ -255,6 +257,19 @@ class MainActivity : Activity() {
                 override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             })
         }, b = 16)
+        val cats = (CATEGORIES.map { it.first } + OTHER).filter { c -> others().any { it.category == c } }
+        if (cats.size > 1) {
+            val chips = hbox()
+            (listOf<String?>(null) + cats).forEach { c ->
+                val on = c == cat
+                chips.addView(tv(c ?: "Toutes", 13f, if (on) AC_TX else TX, on).apply {
+                    gravity = Gravity.CENTER; minHeight = dp(36); setPadding(dp(16), 0, dp(16), 0)
+                    background = if (on) rounded(AC_CHIP, 18) else rounded(S2, 18)
+                    setOnClickListener { cat = c; render() }
+                }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) })
+            }
+            add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) }, b = 16)
+        }
         self?.takeIf { it.hasUpdate }?.let { add(banner(it), b = 18) }
         status()
         val updN = others().count { it.hasUpdate }
@@ -266,9 +281,14 @@ class MainActivity : Activity() {
     private fun fillList(list: LinearLayout) {
         list.removeAllViews()
         val q = query.trim().lowercase()
-        val apps = others().filter { q.isEmpty() || "${it.repo} ${it.description}".lowercase().contains(q) }
+        val apps = others().filter { (cat == null || it.category == cat) && (q.isEmpty() || "${it.repo} ${it.description} ${it.category}".lowercase().contains(q)) }
         if (apps.isEmpty() && Store.apps.isNotEmpty()) list.addView(empty("Aucune app ne correspond."))
-        apps.sortedByDescending { it.hasUpdate }.forEach { list.addView(row(it)) }
+        // grouped by category, in the order of CATEGORIES; a header only when several show
+        val groups = apps.groupBy { it.category }.toList().sortedBy { (c, _) -> CATEGORIES.indexOfFirst { it.first == c }.let { if (it < 0) 99 else it } }
+        for ((c, group) in groups) {
+            if (groups.size > 1) list.addView(tv(c.uppercase(), 12f, AC_TX, true).apply { letterSpacing = .08f; setPadding(dp(8), dp(14), 0, dp(2)) })
+            group.sortedByDescending { it.hasUpdate }.forEach { list.addView(row(it)) }
+        }
     }
 
     private fun banner(app: App) = hbox(

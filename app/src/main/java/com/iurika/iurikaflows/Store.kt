@@ -30,9 +30,22 @@ import kotlin.concurrent.thread
 const val OWNER = "Iurika-N-T-R"
 const val PROFILE = "https://github.com/$OWNER"
 
+// An app's category comes from its repo's GitHub topics: the first category with a matching topic wins, else "Autres".
+// ponytail: hardcoded keywords; a "category-x" topic convention if this list keeps growing
+val CATEGORIES = listOf(
+    "Art" to setOf("art", "digital-art", "artists", "reference-board", "drawing", "painting"),
+    "Médias" to setOf("media", "photo", "photo-gallery", "gallery", "video", "video-player", "music", "audio"),
+    "Productivité" to setOf("productivity", "task-manager", "todo-app", "notes", "calendar"),
+    "Outils" to setOf("tool", "tools", "utility", "randomizer", "converter", "store"),
+    "Jeux" to setOf("game", "games"),
+)
+const val OTHER = "Autres"
+
+fun category(topics: Collection<String>) = CATEGORIES.firstOrNull { (_, keys) -> topics.any { it in keys } }?.first ?: OTHER
+
 class Release(val tag: String, val date: String, val notes: String)
 
-class App(val repo: String, val description: String, val releases: List<Release>, val apkUrl: String, val size: Long) {
+class App(val repo: String, val description: String, val category: String, val releases: List<Release>, val apkUrl: String, val size: Long) {
     val latest get() = releases[0]
     val tag get() = latest.tag
     var pkg: String? = null
@@ -112,7 +125,8 @@ object Store {
                 val assets = rels.firstOrNull()?.getJSONArray("assets") ?: return@mapNotNull null // no release yet
                 val apk = (0 until assets.length()).map(assets::getJSONObject)
                     .firstOrNull { it.getString("name").endsWith(".apk") } ?: return@mapNotNull null
-                App(name, r.optString("description").takeUnless { it == "null" }.orEmpty(), rels.map(::release),
+                val topics = r.optJSONArray("topics")?.let { t -> (0 until t.length()).map(t::getString) }.orEmpty()
+                App(name, r.optString("description").takeUnless { it == "null" }.orEmpty(), category(topics), rels.map(::release),
                     apk.getString("browser_download_url"), apk.getLong("size"))
             }
         resolveInstalled(ctx, apps)
