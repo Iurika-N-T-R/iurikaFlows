@@ -1,4 +1,4 @@
-package com.iurikaflows
+package com.iurika.iurikaflows
 
 import android.app.Activity
 import android.content.Intent
@@ -151,7 +151,6 @@ class MainActivity : Activity() {
             addView(View(this@MainActivity).apply { setBackgroundColor(LINE) }, -1, dp(1))
             addView(nav, -1, dp(76))
         })
-        refresh()
     }
 
     override fun onResume() {
@@ -160,6 +159,8 @@ class MainActivity : Activity() {
         // Back from an app or the system installer: versions may have changed
         Store.resolveInstalled(this, Store.apps)
         render()
+        // Back after a while (the activity often survives in the background): check again without being asked
+        if (Store.apps.isEmpty() || System.currentTimeMillis() - Store.settings(this).getLong("checked", 0) > 5 * 60_000) refresh()
     }
 
     override fun onPause() {
@@ -172,11 +173,11 @@ class MainActivity : Activity() {
         if (tab != 0) { tab = 0; render() } else @Suppress("DEPRECATION") super.onBackPressed()
     }
 
-    private fun refresh() {
+    private fun refresh(force: Boolean = false) {
         if (loading) return
         loading = true; error = null; render()
         thread {
-            val result = runCatching { Store.fetch(this) }
+            val result = runCatching { Store.fetch(this, force) }
             runOnUiThread {
                 loading = false
                 result.onSuccess { Store.apps = it }.onFailure { error = "GitHub injoignable : ${it.message}" }
@@ -208,6 +209,12 @@ class MainActivity : Activity() {
         add(head, t = t, b = 6)
     }
 
+    // Hard refresh: skips GitHub's 60 s cache; spins while a check runs
+    private fun reloadButton() = iconButton(R.drawable.ic_refresh, "Vérifier maintenant") { refresh(force = true) }.apply {
+        if (loading) startAnimation(RotateAnimation(0f, 360f, Animation.RELATIVE_TO_SELF, .5f, Animation.RELATIVE_TO_SELF, .5f)
+            .apply { duration = 800; repeatCount = Animation.INFINITE; interpolator = LinearInterpolator() })
+    }
+
     private fun empty(s: String) = tv(s, 14f, MU).apply { gravity = Gravity.CENTER; setPadding(0, dp(40), 0, dp(40)) }
 
     // Loading / error line, while there is nothing else to show
@@ -231,7 +238,8 @@ class MainActivity : Activity() {
     private fun home() {
         add(hbox(
             storeIcon().sized(dp(38), dp(38), dp(12)),
-            tv("iurikaflows", 22f, bold = true).grow(),
+            tv("iurikaFlows", 22f, bold = true).grow(),
+            reloadButton().sized(dp(44), dp(44), dp(8)),
             iconButton(R.drawable.ic_github, "Profil GitHub") { browse(PROFILE) }.sized(dp(44), dp(44)),
         ), t = 20, b = 12)
         val list = vbox()
@@ -265,7 +273,7 @@ class MainActivity : Activity() {
 
     private fun banner(app: App) = hbox(
         tv("↓", 18f, AC_TX, true).apply { gravity = Gravity.CENTER; background = rounded(AC_CHIP, 18) }.sized(dp(36), dp(36), dp(12)),
-        vbox(tv("iurikaflows ${app.tag} est disponible", 14f, bold = true), tv("${app.installed} → ${app.tag}", 12f, 0xffd7b3c2.toInt())).grow(dp(10)),
+        vbox(tv("iurikaFlows ${app.tag} est disponible", 14f, bold = true), tv("${app.installed} → ${app.tag}", 12f, 0xffd7b3c2.toInt())).grow(dp(10)),
         actionButton(app),
     ).apply { background = rounded(AC_SOFT, 18, AC_LINE); setPadding(dp(14), dp(12), dp(12), dp(12)) }
 
@@ -280,10 +288,7 @@ class MainActivity : Activity() {
             System.currentTimeMillis() - checked < 60_000 -> "Vérifié à l'instant · GitHub Releases"
             else -> "Vérifié ${DateUtils.getRelativeTimeSpanString(checked)} · GitHub Releases"
         }
-        val reload = iconButton(R.drawable.ic_refresh, "Vérifier maintenant") { refresh() }.sized(dp(48), dp(48))
-        if (loading) reload.startAnimation(RotateAnimation(0f, 360f, Animation.RELATIVE_TO_SELF, .5f, Animation.RELATIVE_TO_SELF, .5f)
-            .apply { duration = 800; repeatCount = Animation.INFINITE; interpolator = LinearInterpolator() })
-        h1("Mises à jour", sub, reload)
+        h1("Mises à jour", sub, reloadButton().sized(dp(48), dp(48)))
 
         self?.takeIf { it.hasUpdate || it.repo in Store.progress }?.let { add(storeCard(it), t = 18, b = 8) }
 
@@ -336,7 +341,7 @@ class MainActivity : Activity() {
             storeIcon().sized(dp(52), dp(52), dp(14)),
             vbox(
                 tv("LE STORE LUI-MÊME", 11f, AC_TX, true).apply { letterSpacing = .08f },
-                tv("iurikaflows", 16f, bold = true),
+                tv("iurikaFlows", 16f, bold = true),
                 tv("${app.installed} → ${app.tag} · ${sizeOf(app)}", 13f, 0xffd7b3c2.toInt()),
             ).grow(),
         ),
@@ -385,10 +390,10 @@ class MainActivity : Activity() {
             }
         }.toTypedArray()).apply { background = rounded(S3, 18); setPadding(dp(3), dp(3), dp(3), dp(3)) }
         card(
-            switchRow("autoStore", "Auto-update du store", "iurikaflows se met à jour seul"),
+            switchRow("autoStore", "Auto-update du store", "iurikaFlows se met à jour seul"),
             switchRow("autoApps", "Auto-update des apps", others().take(3).joinToString { it.repo }.ifEmpty { "Les apps installées ici" } + "…"),
             switchRow("wifi", "Wi-Fi uniquement", "Pas de téléchargement en données mobiles") { UpdateJob.schedule(this, true) },
-            switchRow("pre", "Inclure les pré-releases", "Versions beta / rc de GitHub", false) { refresh() },
+            switchRow("pre", "Inclure les pré-releases", "Versions beta / rc de GitHub", false) { refresh(force = true) },
             hbox(text("Vérifier toutes les", "En arrière-plan").grow(dp(12)), seg).apply { setPadding(0, dp(16), 0, dp(16)) },
         )
 

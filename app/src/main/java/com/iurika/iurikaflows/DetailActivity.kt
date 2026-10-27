@@ -1,4 +1,4 @@
-package com.iurikaflows
+package com.iurika.iurikaflows
 
 import android.app.Activity
 import android.content.Intent

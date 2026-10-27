@@ -10,10 +10,10 @@ plugins {
 val keystore = rootProject.file("keystore.properties").takeIf { it.exists() }?.let { f -> Properties().apply { f.inputStream().use(::load) } }
 
 android {
-    namespace = "com.iurikaflows"
+    namespace = "com.iurika.iurikaflows"
     compileSdk = 36
     defaultConfig {
-        applicationId = "com.iurikaflows"
+        applicationId = "com.iurika.iurikaflows"
         minSdk = 24
         targetSdk = 35
         versionCode = 2

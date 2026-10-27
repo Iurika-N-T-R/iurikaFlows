@@ -1,4 +1,4 @@
-package com.iurikaflows
+package com.iurika.iurikaflows
 
 import android.app.Activity
 import android.app.Notification
@@ -74,11 +74,12 @@ object Store {
     }
 
     // Unauthenticated API = 60 requests/hour. The HTTP cache revalidates with ETags, and GitHub doesn't count 304s,
-    // so only repos that actually changed cost a request.
-    private fun get(ctx: Context, url: String): String {
+    // so only repos that actually changed cost a request. GitHub also says max-age=60: [force] skips that minute.
+    private fun get(ctx: Context, url: String, force: Boolean): String {
         if (HttpResponseCache.getInstalled() == null) HttpResponseCache.install(File(ctx.cacheDir, "http"), 5L shl 20)
         val c = URL(url).openConnection() as HttpURLConnection
         c.setRequestProperty("Accept", "application/vnd.github+json")
+        if (force) c.setRequestProperty("Cache-Control", "max-age=0") // still revalidates with the ETag, so 304s stay free
         settings(ctx).getString("token", "")!!.trim().takeIf { it.isNotEmpty() }?.let { c.setRequestProperty("Authorization", "Bearer $it") }
         if (c.responseCode == 403 || c.responseCode == 429) {
             val reset = c.getHeaderField("X-RateLimit-Reset")?.toLongOrNull()?.let { java.text.DateFormat.getTimeInstance().format(it * 1000) }
@@ -98,15 +99,15 @@ object Store {
         it.getBoolean(if (app.isSelf) "autoStore" else "autoApps", true) && it.getBoolean("auto_${app.repo}", true)
     }
 
-    fun fetch(ctx: Context): List<App> {
+    fun fetch(ctx: Context, force: Boolean = false): List<App> {
         val pre = settings(ctx).getBoolean("pre", false)
-        val repos = JSONArray(get(ctx, "https://api.github.com/users/$OWNER/repos?per_page=100&sort=pushed"))
+        val repos = JSONArray(get(ctx, "https://api.github.com/users/$OWNER/repos?per_page=100&sort=pushed", force))
         val apps = (0 until repos.length()).map(repos::getJSONObject)
             .filter { !it.getBoolean("fork") && !it.getBoolean("archived") }
             .mapNotNull { r ->
                 val name = r.getString("name")
                 // One request gives the latest release and the changelog; pre-releases are skipped
-                val list = JSONArray(get(ctx, "https://api.github.com/repos/$OWNER/$name/releases?per_page=30"))
+                val list = JSONArray(get(ctx, "https://api.github.com/repos/$OWNER/$name/releases?per_page=30", force))
                 val rels = (0 until list.length()).map(list::getJSONObject).filter { pre || !it.optBoolean("prerelease") }
                 val assets = rels.firstOrNull()?.getJSONArray("assets") ?: return@mapNotNull null // no release yet
                 val apk = (0 until assets.length()).map(assets::getJSONObject)
@@ -127,11 +128,12 @@ object Store {
             pm.getInstalledApplications(0).filter { it.flags and ApplicationInfo.FLAG_SYSTEM == 0 }
                 .associate { norm(it.loadLabel(pm).toString()) to it.packageName }
         }
+        fun version(pkg: String) = try { pm.getPackageInfo(pkg, 0).versionName ?: "?" } catch (e: PackageManager.NameNotFoundException) { null }
         for (app in apps) {
-            app.pkg = prefs(ctx).getString(app.repo, null) ?: byLabel[norm(app.repo)]
-            app.installed = app.pkg?.let {
-                try { pm.getPackageInfo(it, 0).versionName ?: "?" } catch (e: PackageManager.NameNotFoundException) { null }
-            }
+            // the remembered package may be gone (uninstalled, or the app changed package): fall back to the label
+            val saved = prefs(ctx).getString(app.repo, null)
+            app.pkg = saved?.takeIf { version(it) != null } ?: byLabel[norm(app.repo)] ?: saved
+            app.installed = app.pkg?.let(::version)
         }
     }
 
@@ -149,7 +151,7 @@ object Store {
             return
         }
         if (Build.VERSION.SDK_INT >= 26 && !activity.packageManager.canRequestPackageInstalls()) {
-            Toast.makeText(activity, "Autorise iurikaflows à installer des apps, puis reviens", Toast.LENGTH_LONG).show()
+            Toast.makeText(activity, "Autorise iurikaFlows à installer des apps, puis reviens", Toast.LENGTH_LONG).show()
             activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")))
             return
         }

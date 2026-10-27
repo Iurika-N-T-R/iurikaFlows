@@ -1,4 +1,4 @@
-package com.iurikaflows
+package com.iurika.iurikaflows
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
