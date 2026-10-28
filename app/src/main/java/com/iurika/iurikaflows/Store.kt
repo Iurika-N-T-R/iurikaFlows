@@ -23,7 +23,9 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.Normalizer
+import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
 // Every public, non-fork repo of this account whose latest release has an APK shows up in the store
@@ -112,26 +114,60 @@ object Store {
         it.getBoolean(if (app.isSelf) "autoStore" else "autoApps", true) && it.getBoolean("auto_${app.repo}", true)
     }
 
+    /** Hours between automatic checks, the same setting for the background job and for opening the app. */
+    fun freqMs(ctx: Context) = settings(ctx).getInt("freq", 6) * 3600_000L
+
+    fun due(ctx: Context) = System.currentTimeMillis() - settings(ctx).getLong("checked", 0) >= freqMs(ctx)
+
+    // The last list fetched, so a fresh start shows it at once instead of an empty "Chargement…"
+    private fun saved(ctx: Context) = File(ctx.filesDir, "apps.json")
+
+    fun save(ctx: Context, apps: List<App>) = runCatching {
+        val json = JSONArray(apps.map { a ->
+            JSONObject().put("repo", a.repo).put("description", a.description).put("category", a.category)
+                .put("apkUrl", a.apkUrl).put("size", a.size)
+                .put("releases", JSONArray(a.releases.map { JSONObject().put("tag", it.tag).put("date", it.date).put("notes", it.notes) }))
+        })
+        val tmp = File(ctx.filesDir, "apps.json.tmp")
+        tmp.writeText(json.toString())
+        tmp.renameTo(saved(ctx))
+    }
+
+    fun load(ctx: Context): List<App> = runCatching {
+        val json = JSONArray(saved(ctx).readText())
+        (0 until json.length()).map(json::getJSONObject).map { o ->
+            val rels = o.getJSONArray("releases").let { r -> (0 until r.length()).map(r::getJSONObject).map { Release(it.getString("tag"), it.getString("date"), it.getString("notes")) } }
+            App(o.getString("repo"), o.getString("description"), o.getString("category"), rels, o.getString("apkUrl"), o.getLong("size"))
+        }.filter { it.releases.isNotEmpty() }.also { resolveInstalled(ctx, it) }
+    }.getOrDefault(emptyList())
+
     fun fetch(ctx: Context, force: Boolean = false): List<App> {
         val pre = settings(ctx).getBoolean("pre", false)
         val repos = JSONArray(get(ctx, "https://api.github.com/users/$OWNER/repos?per_page=100&sort=pushed", force))
-        val apps = (0 until repos.length()).map(repos::getJSONObject)
+        // one releases request per repo, several at a time: a cold start waited for each in turn
+        val pool = Executors.newFixedThreadPool(6)
+        val apps = try { (0 until repos.length()).map(repos::getJSONObject)
             .filter { !it.getBoolean("fork") && !it.getBoolean("archived") }
-            .mapNotNull { r ->
-                val name = r.getString("name")
-                // One request gives the latest release and the changelog; pre-releases are skipped
-                val list = JSONArray(get(ctx, "https://api.github.com/repos/$OWNER/$name/releases?per_page=30", force))
-                val rels = (0 until list.length()).map(list::getJSONObject).filter { pre || !it.optBoolean("prerelease") }
-                val assets = rels.firstOrNull()?.getJSONArray("assets") ?: return@mapNotNull null // no release yet
-                val apk = (0 until assets.length()).map(assets::getJSONObject)
-                    .firstOrNull { it.getString("name").endsWith(".apk") } ?: return@mapNotNull null
-                val topics = r.optJSONArray("topics")?.let { t -> (0 until t.length()).map(t::getString) }.orEmpty()
-                App(name, r.optString("description").takeUnless { it == "null" }.orEmpty(), category(topics), rels.map(::release),
-                    apk.getString("browser_download_url"), apk.getLong("size"))
-            }
+            .map { r -> pool.submit(Callable { appOf(ctx, r, pre, force) }) }
+            .mapNotNull { it.get() }
+        } finally { pool.shutdown() }
         resolveInstalled(ctx, apps)
+        save(ctx, apps)
         settings(ctx).edit().putLong("checked", System.currentTimeMillis()).apply()
         return apps
+    }
+
+    private fun appOf(ctx: Context, r: JSONObject, pre: Boolean, force: Boolean): App? {
+        val name = r.getString("name")
+        // One request gives the latest release and the changelog; pre-releases are skipped
+        val list = JSONArray(get(ctx, "https://api.github.com/repos/$OWNER/$name/releases?per_page=30", force))
+        val rels = (0 until list.length()).map(list::getJSONObject).filter { pre || !it.optBoolean("prerelease") }
+        val assets = rels.firstOrNull()?.getJSONArray("assets") ?: return null // no release yet
+        val apk = (0 until assets.length()).map(assets::getJSONObject)
+            .firstOrNull { it.getString("name").endsWith(".apk") } ?: return null
+        val topics = r.optJSONArray("topics")?.let { t -> (0 until t.length()).map(t::getString) }.orEmpty()
+        return App(name, r.optString("description").takeUnless { it == "null" }.orEmpty(), category(topics), rels.map(::release),
+            apk.getString("browser_download_url"), apk.getLong("size"))
     }
 
     // Package names aren't in the release, so: the one we installed it as, else an installed app whose label matches the repo name

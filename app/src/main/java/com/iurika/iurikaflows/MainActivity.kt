@@ -16,6 +16,8 @@ import android.text.format.DateUtils
 import android.text.format.Formatter
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
+import android.view.animation.AlphaAnimation
 import android.view.animation.Animation
 import android.view.animation.LinearInterpolator
 import android.view.animation.RotateAnimation
@@ -141,6 +143,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 0)
         UpdateJob.schedule(this)
+        if (Store.apps.isEmpty()) Store.apps = Store.load(this) // the last list, shown at once
         @Suppress("DEPRECATION") window.statusBarColor = BG
         @Suppress("DEPRECATION") window.navigationBarColor = NAV
 
@@ -161,8 +164,8 @@ class MainActivity : Activity() {
         // Back from an app or the system installer: versions may have changed
         Store.resolveInstalled(this, Store.apps)
         render()
-        // Back after a while (the activity often survives in the background): check again without being asked
-        if (Store.apps.isEmpty() || System.currentTimeMillis() - Store.settings(this).getLong("checked", 0) > 5 * 60_000) refresh()
+        // On its own only as often as the chosen frequency (1 h / 6 h / 24 h), like the background job; ↻ checks any time
+        if (Store.apps.isEmpty() || Store.due(this)) refresh()
     }
 
     override fun onPause() {
@@ -190,6 +193,9 @@ class MainActivity : Activity() {
 
     private fun render() {
         val y = scroll.scrollY
+        // a view removed mid-Animation stays drawn until it ends, and the skeleton's pulse never ends
+        fun stop(v: View) { v.clearAnimation(); (v as? ViewGroup)?.let { g -> (0 until g.childCount).forEach { stop(g.getChildAt(it)) } } }
+        stop(content)
         content.removeAllViews()
         when (tab) { 0 -> home(); 1 -> updates(); 2 -> installed(); else -> settings() }
         scroll.post { scroll.scrollTo(0, y) }
@@ -217,11 +223,25 @@ class MainActivity : Activity() {
             .apply { duration = 800; repeatCount = Animation.INFINITE; interpolator = LinearInterpolator() })
     }
 
+    // A grey stand-in for a row while the very first list loads, pulsing
+    private fun skeleton() = hbox(
+        View(this).apply { background = rounded(S3, 14) }.sized(dp(60), dp(60), dp(14)),
+        vbox(
+            View(this).apply { background = rounded(S3, 6) }.sized(dp(140), dp(14)),
+            View(this).apply { background = rounded(S3, 6) }.sized(dp(200), dp(12)).apply { (layoutParams as? ViewGroup.MarginLayoutParams)?.topMargin = dp(8) },
+            View(this).apply { background = rounded(S3, 6) }.sized(dp(90), dp(10)).apply { (layoutParams as? ViewGroup.MarginLayoutParams)?.topMargin = dp(8) },
+        ).grow(dp(10)),
+        View(this).apply { background = rounded(S3, 20) }.sized(dp(84), dp(40)),
+    ).apply {
+        setPadding(dp(8), dp(12), dp(8), dp(12))
+        startAnimation(AlphaAnimation(1f, .4f).apply { duration = 700; repeatMode = Animation.REVERSE; repeatCount = Animation.INFINITE })
+    }
+
     private fun empty(s: String) = tv(s, 14f, MU).apply { gravity = Gravity.CENTER; setPadding(0, dp(40), 0, dp(40)) }
 
     // Loading / error line, while there is nothing else to show
     private fun status() {
-        if (loading && Store.apps.isEmpty()) add(empty("Chargement…"))
+        if (loading && Store.apps.isEmpty()) repeat(5) { add(skeleton()) }
         else if (error != null) add(tv(error!!, 13f, AC_TX).apply { setPadding(0, dp(12), 0, dp(12)) })
     }
 
