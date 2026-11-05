@@ -442,7 +442,7 @@ class MainActivity : Activity() {
             hbox(text("Compte GitHub", "Repos avec un APK en release").grow(dp(12)),
                 tv(OWNER, 14f, AC_TX, true).apply { setOnClickListener { browse(PROFILE) } }).apply { setPadding(0, dp(16), 0, dp(16)) },
             vbox(
-                text("Token GitHub (optionnel)", "Évite la limite de 60 requêtes par heure de l'API"),
+                text("Token GitHub (optionnel)", "Affiche aussi tes repos privés et évite la limite de 60 requêtes/heure. Fine-grained, lecture seule : Contents + Metadata"),
                 EditText(this).apply {
                     setText(s.getString("token", "")); hint = "ghp_…"; setHintTextColor(MU2); setTextColor(TX); textSize = 14f
                     setSingleLine(); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD

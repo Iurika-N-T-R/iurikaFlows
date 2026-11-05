@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
-// Every public, non-fork repo of this account whose latest release has an APK shows up in the store
+// Every non-fork repo of this account whose latest release has an APK shows up in the store (private ones too, with a token)
 const val OWNER = "Iurika-N-T-R"
 const val PROFILE = "https://github.com/$OWNER"
 
@@ -95,13 +95,18 @@ object Store {
         val c = URL(url).openConnection() as HttpURLConnection
         c.setRequestProperty("Accept", "application/vnd.github+json")
         if (force) c.setRequestProperty("Cache-Control", "max-age=0") // still revalidates with the ETag, so 304s stay free
-        settings(ctx).getString("token", "")!!.trim().takeIf { it.isNotEmpty() }?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+        auth(ctx, c)
         if (c.responseCode == 403 || c.responseCode == 429) {
             val reset = c.getHeaderField("X-RateLimit-Reset")?.toLongOrNull()?.let { java.text.DateFormat.getTimeInstance().format(it * 1000) }
             throw java.io.IOException("limite de l'API GitHub atteinte, réessaie après ${reset ?: "un moment"}")
         }
         return c.inputStream.bufferedReader().use { it.readText() }
     }
+
+    private fun token(ctx: Context) = settings(ctx).getString("token", "")!!.trim().takeIf { it.isNotEmpty() }
+
+    // Android drops the header on the redirect to GitHub's download host, so the token never leaves api.github.com
+    private fun auth(ctx: Context, c: HttpURLConnection) = token(ctx)?.let { c.setRequestProperty("Authorization", "Bearer $it") }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("packages", Context.MODE_PRIVATE)
 
@@ -143,7 +148,9 @@ object Store {
 
     fun fetch(ctx: Context, force: Boolean = false): List<App> {
         val pre = settings(ctx).getBoolean("pre", false)
-        val repos = JSONArray(get(ctx, "https://api.github.com/users/$OWNER/repos?per_page=100&sort=pushed", force))
+        // /users/… only ever lists public repos; with a token, /user/repos adds the private ones
+        val list = if (token(ctx) != null) "user/repos?affiliation=owner&visibility=all&" else "users/$OWNER/repos?"
+        val repos = JSONArray(get(ctx, "https://api.github.com/${list}per_page=100&sort=pushed", force))
         // one releases request per repo, several at a time: a cold start waited for each in turn
         val pool = Executors.newFixedThreadPool(6)
         val apps = try { (0 until repos.length()).map(repos::getJSONObject)
@@ -167,7 +174,7 @@ object Store {
             .firstOrNull { it.getString("name").endsWith(".apk") } ?: return null
         val topics = r.optJSONArray("topics")?.let { t -> (0 until t.length()).map(t::getString) }.orEmpty()
         return App(name, r.optString("description").takeUnless { it == "null" }.orEmpty(), category(topics), rels.map(::release),
-            apk.getString("browser_download_url"), apk.getLong("size"))
+            apk.getString("url"), apk.getLong("size")) // API asset URL: unlike browser_download_url it works for private repos
     }
 
     // Package names aren't in the release, so: the one we installed it as, else an installed app whose label matches the repo name
@@ -237,6 +244,8 @@ object Store {
             pi.openSession(id).use { s ->
                 val c = URL(app.apkUrl).openConnection() as HttpURLConnection
                 c.useCaches = false
+                c.setRequestProperty("Accept", "application/octet-stream")
+                auth(ctx, c)
                 val total = c.contentLengthLong
                 c.inputStream.use { input ->
                     s.openWrite("apk", 0, total).use { out ->
