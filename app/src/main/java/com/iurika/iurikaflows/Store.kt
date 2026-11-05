@@ -100,6 +100,9 @@ object Store {
             val reset = c.getHeaderField("X-RateLimit-Reset")?.toLongOrNull()?.let { java.text.DateFormat.getTimeInstance().format(it * 1000) }
             throw java.io.IOException("limite de l'API GitHub atteinte, réessaie après ${reset ?: "un moment"}")
         }
+        // otherwise Android throws a bare FileNotFoundException(url), which says nothing
+        if (c.responseCode == 401) throw java.io.IOException("token GitHub refusé (expiré ou mal copié ?)")
+        if (c.responseCode >= 400) throw java.io.IOException("HTTP ${c.responseCode} sur $url")
         return c.inputStream.bufferedReader().use { it.readText() }
     }
 
@@ -155,7 +158,7 @@ object Store {
         val pool = Executors.newFixedThreadPool(6)
         val apps = try { (0 until repos.length()).map(repos::getJSONObject)
             .filter { !it.getBoolean("fork") && !it.getBoolean("archived") }
-            .map { r -> pool.submit(Callable { appOf(ctx, r, pre, force) }) }
+            .map { r -> pool.submit(Callable { runCatching { appOf(ctx, r, pre, force) }.getOrNull() }) } // one bad repo must not hide the rest
             .mapNotNull { it.get() }
         } finally { pool.shutdown() }
         resolveInstalled(ctx, apps)
