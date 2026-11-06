@@ -53,7 +53,7 @@ class DetailActivity : Activity() {
         val y = scroll.scrollY
         content.removeAllViews()
         val busy = app.repo in Store.progress
-        val repoUrl = "$PROFILE/${app.repo}"
+        val repoUrl = app.url
 
         add(hbox(
             iconButton(R.drawable.ic_back, "Retour", 0) { finish() }.sized(dp(48), dp(48)),
@@ -67,7 +67,7 @@ class DetailActivity : Activity() {
             iconView(app, 84).sized(dp(84), dp(84), dp(18)),
             vbox(
                 tv(app.repo, 26f, bold = true),
-                tv(OWNER, 14f, AC_TX, true).apply { setPadding(0, dp(4), 0, 0); setOnClickListener { browse(PROFILE) } },
+                tv(app.owner, 14f, AC_TX, true).apply { setPadding(0, dp(4), 0, 0); setOnClickListener { browse("https://github.com/${app.owner}") } },
                 tv("Open source · ${app.latest.date}", 12f, MU).apply { setPadding(0, dp(4), 0, 0) },
             ).grow(),
         ), t = 4, b = 20)

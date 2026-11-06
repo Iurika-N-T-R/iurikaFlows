@@ -21,4 +21,9 @@ class VersionTest {
         assertEquals("Outils", category(listOf("randomizer")))
         assertEquals(OTHER, category(emptyList()))
     }
+
+    @Test fun followedLinks() {
+        val text = "https://github.com/TeamNewPipe/NewPipe\n  github.com/foo/bar.git/ \nbaz/qux\n\nhttps://github.com/Iurika-N-T-R/colorflows\nbaz/qux\nn'importe quoi"
+        assertEquals(listOf("TeamNewPipe" to "NewPipe", "foo" to "bar", "baz" to "qux"), followed(text))
+    }
 }

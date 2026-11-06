@@ -130,6 +130,7 @@ class MainActivity : Activity() {
     private var query = ""
     private var cat: String? = null // null = every category
     private var loading = false
+    private var followEdited = false // the followed list changed: fetch when leaving Réglages, not on every keystroke
     private var error: String? = null
     private val expanded = mutableSetOf<String>()
     private lateinit var scroll: ScrollView
@@ -175,7 +176,11 @@ class MainActivity : Activity() {
 
     @Deprecated("Activity API")
     override fun onBackPressed() {
-        if (tab != 0) { tab = 0; render() } else @Suppress("DEPRECATION") super.onBackPressed()
+        if (tab != 0) { leaveSettings(); tab = 0; render() } else @Suppress("DEPRECATION") super.onBackPressed()
+    }
+
+    private fun leaveSettings() {
+        if (followEdited) { followEdited = false; refresh(force = true) }
     }
 
     private fun refresh(force: Boolean = false) {
@@ -277,7 +282,7 @@ class MainActivity : Activity() {
                 override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             })
         }, b = 16)
-        val cats = (CATEGORIES.map { it.first } + OTHER).filter { c -> others().any { it.category == c } }
+        val cats = (CATEGORIES.map { it.first } + OTHER + FOLLOWED).filter { c -> others().any { it.category == c } }
         if (cats.size > 1) {
             val chips = hbox()
             (listOf<String?>(null) + cats).forEach { c ->
@@ -304,7 +309,7 @@ class MainActivity : Activity() {
         val apps = others().filter { (cat == null || it.category == cat) && (q.isEmpty() || "${it.repo} ${it.description} ${it.category}".lowercase().contains(q)) }
         if (apps.isEmpty() && Store.apps.isNotEmpty()) list.addView(empty("Aucune app ne correspond."))
         // grouped by category, in the order of CATEGORIES; a header only when several show
-        val groups = apps.groupBy { it.category }.toList().sortedBy { (c, _) -> CATEGORIES.indexOfFirst { it.first == c }.let { if (it < 0) 99 else it } }
+        val groups = apps.groupBy { it.category }.toList().sortedBy { (c, _) -> CATEGORIES.indexOfFirst { it.first == c }.let { if (it >= 0) it else if (c == FOLLOWED) 100 else 99 } }
         for ((c, group) in groups) {
             if (groups.size > 1) list.addView(tv(c.uppercase(), 12f, AC_TX, true).apply { letterSpacing = .08f; setPadding(dp(8), dp(14), 0, dp(2)) })
             group.sortedByDescending { it.hasUpdate }.forEach { list.addView(row(it)) }
@@ -455,6 +460,21 @@ class MainActivity : Activity() {
                     })
                 },
             ).apply { setPadding(0, dp(16), 0, dp(16)) },
+            vbox(
+                text("Repos suivis", "Repos d'autres comptes avec un APK en release, un lien ou owner/nom par ligne. Ils apparaissent dans « Suivis » et se mettent à jour comme tes apps"),
+                EditText(this).apply {
+                    setText(s.getString("follow", "")); hint = "https://github.com/owner/repo"; setHintTextColor(MU2); setTextColor(TX); textSize = 14f
+                    inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_VARIATION_URI
+                    minLines = 3; gravity = Gravity.TOP
+                    background = rounded(BG, 14, 0xff34343d.toInt()); setPadding(dp(14), dp(12), dp(14), dp(12))
+                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
+                    addTextChangedListener(object : TextWatcher {
+                        override fun afterTextChanged(e: Editable) { s.edit().putString("follow", e.toString()).apply(); followEdited = true }
+                        override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                        override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                    })
+                },
+            ).apply { setPadding(0, dp(16), 0, dp(16)) },
         )
 
         section("À PROPOS")
@@ -481,7 +501,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
                 addView(pill, LinearLayout.LayoutParams(dp(60), dp(32)))
                 addView(tv(label, 12f, if (on) TX else MU, on).apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, 0) })
-                setOnClickListener { tab = i; scroll.scrollTo(0, 0); render() }
+                setOnClickListener { leaveSettings(); tab = i; scroll.scrollTo(0, 0); render() }
             }, LinearLayout.LayoutParams(0, -1, 1f))
         }
     }

@@ -42,19 +42,29 @@ val CATEGORIES = listOf(
     "Jeux" to setOf("game", "games"),
 )
 const val OTHER = "Autres"
+// Repos of other accounts the user follows (Réglages → Repos suivis) all land here, apart from their own apps
+const val FOLLOWED = "Suivis"
+
+// "owner/name" pairs from pasted GitHub links or plain owner/name, one per line; this account's repos are listed anyway
+fun followed(text: String) = text.lines().mapNotNull { line ->
+    Regex("""(?:github\.com/)?([\w.-]+)/([\w.-]+)""").find(line.trim().removeSuffix("/").removeSuffix(".git"))
+        ?.destructured?.let { (o, n) -> o to n }
+}.filter { !it.first.equals(OWNER, true) }.distinct()
 
 fun category(topics: Collection<String>) = CATEGORIES.firstOrNull { (_, keys) -> topics.any { it in keys } }?.first ?: OTHER
 
 class Release(val tag: String, val date: String, val notes: String)
 
-class App(val repo: String, val description: String, val category: String, val releases: List<Release>, val apkUrl: String, val size: Long) {
+// ponytail: repo name is the key (prefs, progress, details) even for followed repos; key on owner/repo if two ever share a name
+class App(val owner: String, val repo: String, val description: String, val category: String, val releases: List<Release>, val apkUrl: String, val size: Long) {
     val latest get() = releases[0]
     val tag get() = latest.tag
     var pkg: String? = null
     var installed: String? = null
     val hasUpdate get() = installed?.let { isNewer(tag, it) } == true
     // The store lists its own repo too; it's shown apart, as "the store itself"
-    val isSelf get() = repo.equals("iurikaflows", true)
+    val isSelf get() = owner == OWNER && repo.equals("iurikaflows", true)
+    val url get() = "https://github.com/$owner/$repo"
 }
 
 // Numeric compare of "v1.2.10" against "1.2.9"; anything non-numeric is ignored
@@ -132,7 +142,7 @@ object Store {
 
     fun save(ctx: Context, apps: List<App>) = runCatching {
         val json = JSONArray(apps.map { a ->
-            JSONObject().put("repo", a.repo).put("description", a.description).put("category", a.category)
+            JSONObject().put("owner", a.owner).put("repo", a.repo).put("description", a.description).put("category", a.category)
                 .put("apkUrl", a.apkUrl).put("size", a.size)
                 .put("releases", JSONArray(a.releases.map { JSONObject().put("tag", it.tag).put("date", it.date).put("notes", it.notes) }))
         })
@@ -145,7 +155,7 @@ object Store {
         val json = JSONArray(saved(ctx).readText())
         (0 until json.length()).map(json::getJSONObject).map { o ->
             val rels = o.getJSONArray("releases").let { r -> (0 until r.length()).map(r::getJSONObject).map { Release(it.getString("tag"), it.getString("date"), it.getString("notes")) } }
-            App(o.getString("repo"), o.getString("description"), o.getString("category"), rels, o.getString("apkUrl"), o.getLong("size"))
+            App(o.optString("owner", OWNER), o.getString("repo"), o.getString("description"), o.getString("category"), rels, o.getString("apkUrl"), o.getLong("size"))
         }.filter { it.releases.isNotEmpty() }.also { resolveInstalled(ctx, it) }
     }.getOrDefault(emptyList())
 
@@ -156,10 +166,15 @@ object Store {
         val repos = JSONArray(get(ctx, "https://api.github.com/${list}per_page=100&sort=pushed", force))
         // one releases request per repo, several at a time: a cold start waited for each in turn
         val pool = Executors.newFixedThreadPool(6)
-        val apps = try { (0 until repos.length()).map(repos::getJSONObject)
-            .filter { !it.getBoolean("fork") && !it.getBoolean("archived") }
-            .map { r -> pool.submit(Callable { runCatching { appOf(ctx, r, pre, force) }.getOrNull() }) } // one bad repo must not hide the rest
-            .mapNotNull { it.get() }
+        val apps = try {
+            val own = (0 until repos.length()).map(repos::getJSONObject)
+                .filter { !it.getBoolean("fork") && !it.getBoolean("archived") }
+                .map { r -> pool.submit(Callable { runCatching { appOf(ctx, r, pre, force) }.getOrNull() }) } // one bad repo must not hide the rest
+            // followed repos: their repo info (description, fork or not doesn't matter here) then the same release lookup
+            val others = followed(settings(ctx).getString("follow", "")!!).map { (o, n) ->
+                pool.submit(Callable { runCatching { appOf(ctx, JSONObject(get(ctx, "https://api.github.com/repos/$o/$n", force)), pre, force) }.getOrNull() })
+            }
+            (own + others).mapNotNull { it.get() }
         } finally { pool.shutdown() }
         resolveInstalled(ctx, apps)
         save(ctx, apps)
@@ -169,14 +184,17 @@ object Store {
 
     private fun appOf(ctx: Context, r: JSONObject, pre: Boolean, force: Boolean): App? {
         val name = r.getString("name")
+        val owner = r.getJSONObject("owner").getString("login")
         // One request gives the latest release and the changelog; pre-releases are skipped
-        val list = JSONArray(get(ctx, "https://api.github.com/repos/$OWNER/$name/releases?per_page=30", force))
+        val list = JSONArray(get(ctx, "https://api.github.com/repos/$owner/$name/releases?per_page=30", force))
         val rels = (0 until list.length()).map(list::getJSONObject).filter { pre || !it.optBoolean("prerelease") }
         val assets = rels.firstOrNull()?.getJSONArray("assets") ?: return null // no release yet
-        val apk = (0 until assets.length()).map(assets::getJSONObject)
-            .firstOrNull { it.getString("name").endsWith(".apk") } ?: return null
+        // other people's releases often ship one APK per ABI: universal, else arm64, else the first
+        val apks = (0 until assets.length()).map(assets::getJSONObject).filter { it.getString("name").endsWith(".apk", true) }
+        val apk = apks.firstOrNull { "universal" in it.getString("name").lowercase() }
+            ?: apks.firstOrNull { "arm64" in it.getString("name").lowercase() } ?: apks.firstOrNull() ?: return null
         val topics = r.optJSONArray("topics")?.let { t -> (0 until t.length()).map(t::getString) }.orEmpty()
-        return App(name, r.optString("description").takeUnless { it == "null" }.orEmpty(), category(topics), rels.map(::release),
+        return App(owner, name, r.optString("description").takeUnless { it == "null" }.orEmpty(), if (owner == OWNER) category(topics) else FOLLOWED, rels.map(::release),
             apk.getString("url"), apk.getLong("size")) // API asset URL: unlike browser_download_url it works for private repos
     }
 
