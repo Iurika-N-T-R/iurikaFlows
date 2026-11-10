@@ -267,33 +267,50 @@ object Store {
         }
     }
 
-    // Streams the APK straight into an install session. Apps this store installed update silently on Android 12+.
+    // The APK is kept 12 h in the cache: if Android's install prompt is refused or fails, tapping again reinstalls without re-downloading
+    private const val KEEP_MS = 12 * 3600_000L
+
+    private fun download(ctx: Context, app: App, progress: (Int) -> Unit): File {
+        val dir = File(ctx.cacheDir, "apk").apply { mkdirs() }
+        dir.listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > KEEP_MS }?.forEach { it.delete() }
+        val apk = File(dir, "${app.owner}-${app.repo}-${app.tag}.apk".replace(Regex("[^\\w.-]"), "_"))
+        if (apk.length() == app.size) return apk.also { progress(100) }
+        val part = File(dir, apk.name + ".part")
+        val c = URL(app.apkUrl).openConnection() as HttpURLConnection
+        c.useCaches = false
+        c.setRequestProperty("Accept", "application/octet-stream")
+        auth(ctx, c)
+        check(c)
+        val total = c.contentLengthLong
+        c.inputStream.use { input ->
+            part.outputStream().use { out ->
+                val buf = ByteArray(64 * 1024)
+                var done = 0L
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    done += n
+                    if (total > 0) progress((done * 100 / total).toInt())
+                }
+            }
+        }
+        if (!part.renameTo(apk)) throw java.io.IOException("APK non enregistré")
+        return apk
+    }
+
+    // Downloads (or reuses the cached APK), then hands it to an install session. Apps this store installed update silently on Android 12+.
     fun install(ctx: Context, app: App, progress: (Int) -> Unit = {}) {
+        val apk = download(ctx, app, progress)
         val pi = ctx.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
         if (Build.VERSION.SDK_INT >= 31) params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
         val id = pi.createSession(params)
         try {
             pi.openSession(id).use { s ->
-                val c = URL(app.apkUrl).openConnection() as HttpURLConnection
-                c.useCaches = false
-                c.setRequestProperty("Accept", "application/octet-stream")
-                auth(ctx, c)
-                check(c)
-                val total = c.contentLengthLong
-                c.inputStream.use { input ->
-                    s.openWrite("apk", 0, total).use { out ->
-                        val buf = ByteArray(64 * 1024)
-                        var done = 0L
-                        while (true) {
-                            val n = input.read(buf)
-                            if (n < 0) break
-                            out.write(buf, 0, n)
-                            done += n
-                            if (total > 0) progress((done * 100 / total).toInt())
-                        }
-                        s.fsync(out)
-                    }
+                s.openWrite("apk", 0, apk.length()).use { out ->
+                    apk.inputStream().use { it.copyTo(out, 64 * 1024) }
+                    s.fsync(out)
                 }
                 val intent = Intent(ctx, InstallReceiver::class.java).putExtra("repo", app.repo)
                 val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
