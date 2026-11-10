@@ -106,20 +106,32 @@ object Store {
         c.setRequestProperty("Accept", "application/vnd.github+json")
         if (force) c.setRequestProperty("Cache-Control", "max-age=0") // still revalidates with the ETag, so 304s stay free
         auth(ctx, c)
-        if (c.responseCode == 403 || c.responseCode == 429) {
+        check(c)
+        return c.inputStream.bufferedReader().use { it.readText() }
+    }
+
+    // Otherwise Android throws a bare FileNotFoundException(url), which says nothing
+    private fun check(c: HttpURLConnection) {
+        val code = c.responseCode
+        if (code < 400) return
+        if (code == 429 || c.getHeaderField("X-RateLimit-Remaining") == "0") {
             val reset = c.getHeaderField("X-RateLimit-Reset")?.toLongOrNull()?.let { java.text.DateFormat.getTimeInstance().format(it * 1000) }
             throw java.io.IOException("limite de l'API GitHub atteinte, réessaie après ${reset ?: "un moment"}")
         }
-        // otherwise Android throws a bare FileNotFoundException(url), which says nothing
-        if (c.responseCode == 401) throw java.io.IOException("token GitHub refusé (expiré ou mal copié ?)")
-        if (c.responseCode >= 400) throw java.io.IOException("HTTP ${c.responseCode} sur $url")
-        return c.inputStream.bufferedReader().use { it.readText() }
+        if (code == 401) throw java.io.IOException("token GitHub refusé (expiré ou mal copié ?)")
+        // any other 403/404: GitHub's own message says why (org policy, token scope, secondary limit…)
+        val msg = runCatching { JSONObject(c.errorStream.bufferedReader().readText()).optString("message") }.getOrNull().orEmpty()
+        throw java.io.IOException("GitHub $code : ${msg.ifEmpty { c.url.toString() }}")
     }
 
     private fun token(ctx: Context) = settings(ctx).getString("token", "")!!.trim().takeIf { it.isNotEmpty() }
 
+    // Only this account's URLs get the token: followed repos are public, and their owner (an org) may refuse a foreign token with a 403.
     // Android drops the header on the redirect to GitHub's download host, so the token never leaves api.github.com
-    private fun auth(ctx: Context, c: HttpURLConnection) = token(ctx)?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+    private fun auth(ctx: Context, c: HttpURLConnection) {
+        val u = c.url.toString()
+        if ("api.github.com/user/" in u || u.contains("/repos/$OWNER/", true)) token(ctx)?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+    }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("packages", Context.MODE_PRIVATE)
 
@@ -267,6 +279,7 @@ object Store {
                 c.useCaches = false
                 c.setRequestProperty("Accept", "application/octet-stream")
                 auth(ctx, c)
+                check(c)
                 val total = c.contentLengthLong
                 c.inputStream.use { input ->
                     s.openWrite("apk", 0, total).use { out ->
