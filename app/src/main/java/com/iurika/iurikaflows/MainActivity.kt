@@ -132,6 +132,7 @@ class MainActivity : Activity() {
     private var loading = false
     private var followEdited = false // the followed list changed: fetch when leaving Réglages, not on every keystroke
     private var error: String? = null
+    private var lanMsg: String? = null // pairing / sync result line in Réglages
     private val expanded = mutableSetOf<String>()
     private lateinit var scroll: ScrollView
     private lateinit var content: LinearLayout
@@ -144,6 +145,9 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 0)
         UpdateJob.schedule(this)
+        Lan.start(this)
+        // stays set while paused: settings pushed from another device still refetch the list
+        Lan.onApplied = { followEdited = false; refresh(force = true) }
         if (Store.apps.isEmpty()) Store.apps = Store.load(this) // the last list, shown at once
         @Suppress("DEPRECATION") window.statusBarColor = BG
         @Suppress("DEPRECATION") window.navigationBarColor = NAV
@@ -167,6 +171,12 @@ class MainActivity : Activity() {
         render()
         // On its own only as often as the chosen frequency (1 h / 6 h / 24 h), like the background job; ↻ checks any time
         if (Store.apps.isEmpty() || Store.due(this)) refresh()
+        thread { Lan.sync(this) }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Lan.onApplied = null
     }
 
     override fun onPause() {
@@ -181,6 +191,7 @@ class MainActivity : Activity() {
 
     private fun leaveSettings() {
         if (followEdited) { followEdited = false; refresh(force = true) }
+        if (tab == 3) thread { Lan.sync(this) } // token typed / repos edited: push them out
     }
 
     private fun refresh(force: Boolean = false) {
@@ -412,7 +423,6 @@ class MainActivity : Activity() {
         fun section(t: String) = add(tv(t, 12f, AC_TX, true).apply { letterSpacing = .08f }, t = 24, b = 8)
         fun card(vararg rows: View, b: Int = 0) =
             add(divided(vbox(*rows)).apply { background = rounded(S1, 20); setPadding(dp(16), 0, dp(16), 0) }, b = b)
-        fun text(title: String, desc: String) = vbox(tv(title, 15f, bold = true), tv(desc, 12f, MU).apply { setPadding(0, dp(3), 0, 0) })
         fun switchRow(key: String, title: String, desc: String, def: Boolean = true, then: () -> Unit = {}): View {
             val sw = Switch(this).apply {
                 isChecked = s.getBoolean(key, def)
@@ -454,32 +464,109 @@ class MainActivity : Activity() {
                     background = rounded(BG, 14, 0xff34343d.toInt()); setPadding(dp(14), 0, dp(14), 0)
                     layoutParams = LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(10) }
                     addTextChangedListener(object : TextWatcher {
-                        override fun afterTextChanged(e: Editable) { s.edit().putString("token", e.toString().trim()).apply() }
+                        override fun afterTextChanged(e: Editable) { s.edit().putString("token", e.toString().trim()).apply(); Lan.edited(this@MainActivity) }
                         override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
                         override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
                     })
                 },
             ).apply { setPadding(0, dp(16), 0, dp(16)) },
-            vbox(
-                text("Repos suivis", "Repos d'autres comptes avec un APK en release, un lien ou owner/nom par ligne. Ils apparaissent dans « Suivis » et se mettent à jour comme tes apps"),
-                EditText(this).apply {
-                    setText(s.getString("follow", "")); hint = "https://github.com/owner/repo"; setHintTextColor(MU2); setTextColor(TX); textSize = 14f
-                    inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_VARIATION_URI
-                    minLines = 3; gravity = Gravity.TOP
-                    background = rounded(BG, 14, 0xff34343d.toInt()); setPadding(dp(14), dp(12), dp(14), dp(12))
-                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
-                    addTextChangedListener(object : TextWatcher {
-                        override fun afterTextChanged(e: Editable) { s.edit().putString("follow", e.toString()).apply(); followEdited = true }
-                        override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                        override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                    })
-                },
-            ).apply { setPadding(0, dp(16), 0, dp(16)) },
+            followCard(s),
         )
+
+        section("SYNCHRO LAN")
+        lanCard()
 
         section("À PROPOS")
         val version = packageManager.getPackageInfo(packageName, 0).versionName
         card(hbox(tv("Version du store", 14f, MU).grow(), tv("$version · stable", 14f, bold = true)).apply { setPadding(0, dp(16), 0, dp(16)) }, b = 28)
+    }
+
+    private fun text(title: String, desc: String) = vbox(tv(title, 15f, bold = true), tv(desc, 12f, MU).apply { setPadding(0, dp(3), 0, 0) })
+
+    private fun field(hint: String) = EditText(this).apply {
+        this.hint = hint; setHintTextColor(MU2); setTextColor(TX); textSize = 14f; setSingleLine()
+        background = rounded(BG, 14, 0xff34343d.toInt()); setPadding(dp(14), 0, dp(14), 0)
+    }
+
+    private fun pill(label: String, primary: Boolean = false, onClick: () -> Unit) =
+        tv(label, 13f, if (primary) ON_AC else TX, true).apply {
+            gravity = Gravity.CENTER; setPadding(dp(16), 0, dp(16), 0); minHeight = dp(42)
+            background = rounded(if (primary) AC else S3, 21); setOnClickListener { onClick() }
+        }
+
+    // Repos suivis: one row per repo (tap = open on GitHub, ✕ = remove) and a field to add links
+    private fun followCard(s: android.content.SharedPreferences): View {
+        val list = followed(s.getString("follow", "")!!)
+        fun save(l: List<Pair<String, String>>) {
+            s.edit().putString("follow", l.joinToString("\n") { (o, n) -> "$o/$n" }).apply()
+            Lan.edited(this); followEdited = true; render()
+        }
+        val input = field("github.com/owner/repo").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI }
+        fun addInput() {
+            val new = followed(input.text.toString())
+            if (new.isEmpty()) { input.error = "Lien GitHub ou owner/nom (hors $OWNER)"; return }
+            save((list + new).distinct())
+        }
+        input.setOnEditorActionListener { _, _, _ -> addInput(); true }
+        val rows = list.map { (o, n) ->
+            hbox(
+                icon(R.drawable.ic_github, MU).sized(dp(20), dp(20), dp(12)),
+                vbox(tv(n, 15f, bold = true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }, tv(o, 12f, MU)).grow(dp(8)),
+                iconButton(R.drawable.ic_close, "Retirer $o/$n", 0) { save(list - (o to n)) }.sized(dp(40), dp(40)),
+            ).apply { setPadding(dp(14), dp(8), dp(4), dp(8)); setOnClickListener { browse("https://github.com/$o/$n") } }
+        }
+        return vbox(
+            text("Repos suivis", "Repos d'autres comptes avec un APK en release. Ils apparaissent dans « Suivis » et se mettent à jour comme tes apps"),
+            divided(vbox(*rows.toTypedArray())).apply {
+                background = rounded(BG, 14, 0xff34343d.toInt()); visibility = if (rows.isEmpty()) View.GONE else View.VISIBLE
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
+            },
+            hbox(input.grow(dp(8)).apply { layoutParams.height = dp(46) }, pill("Ajouter", true, ::addInput)).apply {
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
+            },
+        ).apply { setPadding(0, dp(16), 0, dp(16)) }
+    }
+
+    // Token + Repos suivis shared with my other devices on the same Wi-Fi (Lan.kt)
+    private fun lanCard() {
+        fun work(start: String, job: () -> String) {
+            lanMsg = start; render()
+            thread { val m = job(); runOnUiThread { lanMsg = m; render() } }
+        }
+        val rows = mutableListOf<View>()
+        if (Lan.key(this) != null) {
+            val seen = Lan.lastSeen(this)
+            rows += hbox(
+                text("Appareil associé", if (seen == 0L) "Pas encore vu sur ce réseau"
+                    else "Dernière synchro ${DateUtils.getRelativeTimeSpanString(seen)}").grow(dp(12)),
+                pill("Synchroniser") { work("Recherche des appareils…") { Lan.sync(this).let { if (it == 0) "Aucun appareil associé trouvé sur ce Wi-Fi" else "Synchronisé avec $it appareil(s)" } } },
+            ).apply { setPadding(0, dp(16), 0, dp(16)) }
+        }
+        val code = Lan.code
+        rows += hbox(
+            text("Ajouter un appareil", if (code == null) "Affiche un code ici, tape-le dans iurikaFlows sur l'autre appareil (même Wi-Fi)"
+                else "Tape ce code sur l'autre appareil · valable 5 min").grow(dp(12)),
+            if (code == null) pill("Afficher un code") { Lan.newCode(); render() }
+            else tv(code.chunked(3).joinToString(" "), 24f, AC_TX, true).apply { letterSpacing = .1f },
+        ).apply { setPadding(0, dp(16), 0, dp(16)) }
+        val input = field("Code à 6 chiffres").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        fun join() {
+            val c = input.text.toString().filter(Char::isDigit)
+            if (c.length != 6) { input.error = "6 chiffres"; return }
+            work("Recherche de l'appareil…") { if (Lan.pair(this, c)) "Associé ✓ token et repos synchronisés" else "Aucun appareil n'affiche ce code sur ce Wi-Fi" }
+        }
+        input.setOnEditorActionListener { _, _, _ -> join(); true }
+        rows += vbox(
+            text("Rejoindre un appareil", "Entre le code affiché sur l'autre appareil"),
+            hbox(input.grow(dp(8)).apply { layoutParams.height = dp(46) }, pill("Associer", true, ::join)).apply {
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
+            },
+        ).apply { setPadding(0, dp(16), 0, dp(16)) }
+        lanMsg?.let { rows += tv(it, 13f, AC_TX).apply { setPadding(0, dp(14), 0, dp(14)) } }
+        if (Lan.key(this) != null) rows += tv("Dissocier cet appareil", 14f, MU).apply {
+            setPadding(0, dp(16), 0, dp(16)); setOnClickListener { Lan.unpair(this@MainActivity); lanMsg = null; render() }
+        }
+        add(divided(vbox(*rows.toTypedArray())).apply { background = rounded(S1, 20); setPadding(dp(16), 0, dp(16), 0) })
     }
 
     // ---- Barre du bas ----

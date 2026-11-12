@@ -62,7 +62,9 @@ It is free, open source, has zero dependencies and contains no ads or trackers.
 | 📦 | **Installed apps** | What you installed from the store, per-app auto-update switch, uninstall |
 | 🧪 | **Pre-releases** | Opt in to test versions |
 | 🔑 | **GitHub token** | Optional, lifts the 60 requests/hour API limit |
-| 🔒 | **Private by design** | Talks only to the GitHub API — no account, no tracking |
+| ⭐ | **Followed repos** | Add other accounts' repos with an APK in their releases |
+| 📡 | **LAN sync** | Token and followed repos shared between your devices on the same Wi-Fi, paired with a 6-digit code |
+| 🔒 | **Private by design** | Talks only to the GitHub API and your own paired devices — no account, no tracking |
 
 <details>
 <summary><b>📖 How it works</b></summary>
@@ -71,7 +73,7 @@ It is free, open source, has zero dependencies and contains no ads or trackers.
 - **Découvrir**: search your apps, Install / Update / Open from the list; a banner when iurikaFlows itself has a new version
 - **Mises à jour**: pending updates with their release notes, "update all", last check time and a manual check; apps already up to date
 - **Installées**: apps installed from the store
-- **Réglages**: auto-update of the store and of the apps, Wi-Fi only, pre-releases, check every 1 h / 6 h / 24 h, optional GitHub token
+- **Réglages**: auto-update of the store and of the apps, Wi-Fi only, pre-releases, check every 1 h / 6 h / 24 h, optional GitHub token, followed repos list, LAN sync (show a code on one device, type it on the other)
 - **App page**: version, size, installed version, release count, Install / Update / Open with a progress bar, what's new and full changelog, description, repo and releases links, per-app auto-update switch, uninstall
 - Apps installed through iurikaFlows update silently in the background (Android 12+); iurikaFlows updates itself the same way
 
