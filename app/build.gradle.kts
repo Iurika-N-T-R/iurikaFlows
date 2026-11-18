@@ -16,8 +16,8 @@ android {
         applicationId = "com.iurika.iurikaflows"
         minSdk = 24
         targetSdk = 35
-        versionCode = 10
-        versionName = "0.0.10"
+        versionCode = 11
+        versionName = "0.0.11"
     }
     signingConfigs {
         if (keystore != null) create("release") {

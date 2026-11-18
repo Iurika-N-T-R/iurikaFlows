@@ -63,7 +63,7 @@ It is free, open source, has zero dependencies and contains no ads or trackers.
 | 🧪 | **Pre-releases** | Opt in to test versions |
 | 🔑 | **GitHub token** | Optional, lifts the 60 requests/hour API limit |
 | ⭐ | **Followed repos** | Add other accounts' repos with an APK in their releases |
-| 📡 | **LAN sync** | Token and followed repos shared between your devices on the same Wi-Fi, paired with a 6-digit code |
+| 📡 | **LAN sync** | Token and followed repos shared between your devices on the same Wi-Fi, paired with a 6-digit code, encrypted (AES-256-GCM) |
 | 🔒 | **Private by design** | Talks only to the GitHub API and your own paired devices — no account, no tracking |
 
 <details>

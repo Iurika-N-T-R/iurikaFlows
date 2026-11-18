@@ -546,7 +546,7 @@ class MainActivity : Activity() {
         rows += hbox(
             text("Ajouter un appareil", if (code == null) "Affiche un code ici, tape-le dans iurikaFlows sur l'autre appareil (même Wi-Fi)"
                 else "Tape ce code sur l'autre appareil · valable 5 min").grow(dp(12)),
-            if (code == null) pill("Afficher un code") { Lan.newCode(); render() }
+            if (code == null) pill("Afficher un code") { Lan.newCode(this); render() }
             else tv(code.chunked(3).joinToString(" "), 24f, AC_TX, true).apply { letterSpacing = .1f },
         ).apply { setPadding(0, dp(16), 0, dp(16)) }
         val input = field("Code à 6 chiffres").apply { inputType = InputType.TYPE_CLASS_NUMBER }
